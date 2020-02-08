@@ -8,8 +8,9 @@ def normalizeRows(x):
     Implement a function that normalizes each row of a matrix to have
     unit length.
     """
-    N = x.shape[0]
-    x /= np.sqrt(np.sum(x**2, axis=1)).reshape((N,1)) + 1e-30
+    N = x.shape[0] # x is a matrix
+    x /= np.sqrt(np.sum(x**2, axis=1)).reshape((N,1)) + 1e-30 
+    # as the right side is a denomenator, it's good to add some small val for numerical robustness.
     return x
 
 def softmax(x):

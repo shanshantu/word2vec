@@ -6,6 +6,10 @@ import random
 from utils.gradcheck import gradcheck_naive
 from utils.utils import normalizeRows, softmax
 
+from functools import reduce
+import collections
+#from multiprocessing import Pool
+
 
 def sigmoid(x):
     """
@@ -16,9 +20,7 @@ def sigmoid(x):
     s -- sigmoid(x)
     """
 
-    ### YOUR CODE HERE
-
-    ### END YOUR CODE
+    s = 1.0 / (1.0 + np.exp(-x)) 
 
     return s
 
@@ -52,15 +54,15 @@ def naiveSoftmaxLossAndGradient(
                     (dJ / dU)
     """
 
-    ### YOUR CODE HERE
-
-    ### Please use the provided softmax function (imported earlier in this file)
-    ### This numerically stable implementation helps you avoid issues pertaining
-    ### to integer overflow. 
-
-
-    ### END YOUR CODE
-
+    ### Use the provided softmax function (imported earlier in this file)
+    ### This numerically stable implementation helps to avoid issues pertaining
+    ### to integer overflow.  # as prob is too small for some sparse phrase.
+    y_hat = softmax(outsideVectors @ centerWordVec) # input shape: (|words|,)
+    loss = - np.log(y_hat[outsideWordIdx]) # Overflow's problem!!! Can't input a scalar into softmax.
+    y = np.zeros((outsideVectors.shape[0],))
+    y[outsideWordIdx] = 1.0
+    gradCenterVec = - (y - y_hat) @ outsideVectors
+    gradOutsideVecs = - (y - y_hat).reshape((outsideVectors.shape[0], 1)) * centerWordVec # outerprod 
     return loss, gradCenterVec, gradOutsideVecs
 
 
@@ -97,24 +99,33 @@ def negSamplingLossAndGradient(
     Arguments/Return Specifications: same as naiveSoftmaxLossAndGradient
     """
 
-    # Negative sampling of words is done for you. Do not modify this if you
-    # wish to match the autograder and receive points!
     negSampleWordIndices = getNegativeSamples(outsideWordIdx, dataset, K)
     indices = [outsideWordIdx] + negSampleWordIndices
 
-    ### YOUR CODE HERE
+    # Atten: for repeated sampled indices, we need to sum the grads together.
+    Idx2Cnt = collections.Counter(indices) # index: cnt
+    uniqIndices = list(Idx2Cnt.keys())
+    uniqCnts = np.asarray(list(Idx2Cnt.values()))
+    uniqSize = len(uniqIndices)
+    uniqSign = np.ones(uniqSize)
+    uniqSign[uniqIndices.index(outsideWordIdx)] = -1
+    uniq_U_vc = outsideVectors[uniqIndices] @ centerWordVec
+    
+    
+    loss = - sum(np.log(sigmoid(-uniq_U_vc*uniqSign))*uniqCnts) 
+    gradCenterVec = sigmoid(uniq_U_vc*uniqSign) @ \
+    ((uniqSign*uniqCnts).reshape((uniqSize,1))*outsideVectors[uniqIndices])
 
-    ### Please use your implementation of sigmoid in here.
-
-
-    ### END YOUR CODE
-
+    gradOutsideVecs = np.zeros(outsideVectors.shape)
+    gradOutsideVecs[uniqIndices] = (uniqSign*uniqCnts*\
+        sigmoid(uniq_U_vc*uniqSign)).reshape((uniqSize,1)) * centerWordVec
+    
     return loss, gradCenterVec, gradOutsideVecs
 
 
 def skipgram(currentCenterWord, windowSize, outsideWords, word2Ind,
              centerWordVectors, outsideVectors, dataset,
-             word2vecLossAndGradient=naiveSoftmaxLossAndGradient):
+             word2vecLossAndGradient=naiveSoftmaxLossAndGradient): # functional programming
     """ Skip-gram model in word2vec
 
     Implement the skip-gram model in this function.
@@ -135,22 +146,34 @@ def skipgram(currentCenterWord, windowSize, outsideWords, word2Ind,
                                loss functions you implemented above.
 
     Return:
-    loss -- the loss function value for the skip-gram model
-            (J in the pdf handout)
-    gradCenterVecs -- the gradient with respect to the center word vectors
-            (dJ / dV in the pdf handout)
-    gradOutsideVectors -- the gradient with respect to the outside word vectors
-                        (dJ / dU in the pdf handout)
+    loss -- the loss function value for the skip-gram model(J)
+    gradCenterVecs -- the gradient with respect to the center word vectors(dJ / dV)
+    gradOutsideVectors -- the gradient with respect to the outside word vectors(dJ / dU)
     """
 
-    loss = 0.0
+    # Required inputs: centerWordVec, outsideWordIdx
+    assert(currentCenterWord in word2Ind)
+    centerIdx = word2Ind[currentCenterWord]
+    centerWordVec = centerWordVectors[centerIdx]
+    outsideWordIndices = [word2Ind[w] for w in outsideWords]
+    # map - reduce
+
+    
+    def mapper(outsideWordIdx):
+        return np.asarray(word2vecLossAndGradient(centerWordVec, outsideWordIdx, outsideVectors, dataset))
+
+    def reducer(prev, cur): # prev and cur are both a triple of loss, gradCenterVec, and gradOutsideVecs.
+        return prev + cur 
+
+    mapped = map(mapper, outsideWordIndices)
+    #mapped = pool.map(mapper, outsideWordIndices)
+    reduced = reduce(reducer, mapped)
+    loss_total, gradCenterVec_total, gradOutsideVecs_total = reduced
+
+    loss = loss_total
     gradCenterVecs = np.zeros(centerWordVectors.shape)
-    gradOutsideVectors = np.zeros(outsideVectors.shape)
-
-    ### YOUR CODE HERE
-
-    ### END YOUR CODE
-
+    gradCenterVecs[centerIdx] = gradCenterVec_total
+    gradOutsideVectors = gradOutsideVecs_total
     return loss, gradCenterVecs, gradOutsideVectors
 
 #############################################
@@ -259,4 +282,5 @@ Gradient wrt Center Vectors (dJ/dV):
     """)
 
 if __name__ == "__main__":
+   # pool = Pool(2) # can't be local
     test_word2vec()
